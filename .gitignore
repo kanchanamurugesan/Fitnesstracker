@@ -1,0 +1,23 @@
+# Dependencies
+node_modules/
+
+# Web build output (regenerated in CI)
+dist/
+
+# Private local app data — user's photos & database must never be committed
+server/data/
+server/src/data/
+*.db
+*.db-wal
+*.db-shm
+
+# Android build outputs / local SDK config (also covered by android/.gitignore)
+client/android/.gradle/
+client/android/build/
+client/android/app/build/
+client/android/local.properties
+client/android/capacitor-cordova-android-plugins/
+
+# Misc
+.DS_Store
+*.log
