@@ -39,6 +39,28 @@ async function hashPassword(password, salt) {
 // The single local account record (id = 1), or null before signup.
 const getAccount = () => get('account', 1);
 
+// ---- backup helpers (photos are Blobs; JSON needs base64) -------------------
+// Every object store the app owns. Order matters on restore only in that we
+// clear and repopulate each independently, so it's just the full set.
+const BACKUP_STORES = ['account', 'plan_day', 'exercise', 'exercise_log', 'daily_log', 'body_entry', 'meal', 'photo'];
+
+const blobToDataURL = (blob) =>
+  new Promise((resolve, reject) => {
+    const r = new FileReader();
+    r.onload = () => resolve(r.result);
+    r.onerror = () => reject(r.error);
+    r.readAsDataURL(blob);
+  });
+
+function dataURLToBlob(dataURL) {
+  const [meta, b64] = String(dataURL).split(',');
+  const mime = (meta.match(/data:(.*?);base64/) || [])[1] || 'application/octet-stream';
+  const bin = atob(b64 || '');
+  const bytes = new Uint8Array(bin.length);
+  for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+  return new Blob([bytes], { type: mime });
+}
+
 async function requireAccount() {
   const acct = await getAccount();
   if (!token || !acct) throw new Error('Not signed in.');
@@ -147,6 +169,55 @@ export const api = {
     const salt = randHex(8);
     await put('account', { ...acct, salt, password_hash: await hashPassword(newPassword, salt) });
     return { ok: true };
+  },
+
+  // ---- backup & restore ----------------------------------------------------
+  // Dump every store into one plain object. Photo blobs become base64 data URLs
+  // so the whole thing serialises to a single JSON file the user can keep safe.
+  async exportData() {
+    await requireAccount();
+    const stores = {};
+    for (const name of BACKUP_STORES) stores[name] = await getAll(name);
+    stores.photo = await Promise.all(
+      (stores.photo || []).map(async ({ blob, ...rest }) => ({
+        ...rest,
+        image: blob ? await blobToDataURL(blob) : null,
+      })),
+    );
+    return { app: 'fitness-tracker', version: 1, exported_at: new Date().toISOString(), stores };
+  },
+
+  // Replace ALL data on this device with the contents of a backup file.
+  async importData(file) {
+    await requireAccount();
+    let payload;
+    try {
+      payload = JSON.parse(await file.text());
+    } catch {
+      throw new Error('That file is not a valid backup.');
+    }
+    if (payload?.app !== 'fitness-tracker' || !payload.stores) {
+      throw new Error('That file is not a Fitness Tracker backup.');
+    }
+    const stores = payload.stores;
+    // Guard: a backup without an account would wipe the login and lock us out.
+    if (!Array.isArray(stores.account) || !stores.account.length) {
+      throw new Error('This backup is missing its account and cannot be restored.');
+    }
+    // Rebuild photo blobs from their base64 form.
+    const photos = (stores.photo || []).map(({ image, blob, ...rest }) => ({
+      ...rest,
+      blob: image ? dataURLToBlob(image) : (blob ?? null),
+    }));
+
+    const counts = {};
+    for (const name of BACKUP_STORES) {
+      const rows = name === 'photo' ? photos : (Array.isArray(stores[name]) ? stores[name] : []);
+      await clear(name);
+      for (const row of rows) await put(name, row); // rows keep their original keys/ids
+      counts[name] = rows.length;
+    }
+    return { ok: true, counts };
   },
 
   // ---- settings ------------------------------------------------------------

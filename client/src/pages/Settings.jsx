@@ -4,17 +4,28 @@ import {
   ToggleButtonGroup, ToggleButton, CircularProgress, Snackbar,
 } from '@mui/material';
 import UploadFileIcon from '@mui/icons-material/UploadFile';
+import DownloadIcon from '@mui/icons-material/Download';
+import RestoreIcon from '@mui/icons-material/Restore';
+import { Capacitor } from '@capacitor/core';
+import { Filesystem, Directory, Encoding } from '@capacitor/filesystem';
+import { Share } from '@capacitor/share';
 import { api } from '../api.js';
 import { useAuth } from '../context/AuthContext.jsx';
 
 export default function Settings() {
   const { logout, user } = useAuth();
   const fileRef = useRef();
+  const backupRef = useRef();
   const [settings, setSettings] = useState(null);
   const [importMsg, setImportMsg] = useState(null);
   const [importErr, setImportErr] = useState(null);
   const [importing, setImporting] = useState(false);
   const [toast, setToast] = useState('');
+
+  // backup & restore
+  const [backupBusy, setBackupBusy] = useState(false);
+  const [backupMsg, setBackupMsg] = useState(null);
+  const [backupErr, setBackupErr] = useState(null);
 
   // change password
   const [currentPassword, setCurrentPassword] = useState('');
@@ -39,6 +50,48 @@ export default function Settings() {
     } finally {
       setImporting(false);
       if (fileRef.current) fileRef.current.value = '';
+    }
+  }
+
+  async function downloadBackup() {
+    setBackupBusy(true); setBackupErr(null); setBackupMsg(null);
+    try {
+      const data = await api.exportData();
+      const json = JSON.stringify(data);
+      const filename = `fitness-backup-${new Date().toISOString().slice(0, 10)}.json`;
+      if (Capacitor.isNativePlatform()) {
+        // WebView can't do browser downloads — write a file, then open the share sheet.
+        const res = await Filesystem.writeFile({
+          path: filename, data: json, directory: Directory.Cache, encoding: Encoding.UTF8,
+        });
+        await Share.share({ title: 'Fitness Tracker backup', url: res.uri });
+      } else {
+        const url = URL.createObjectURL(new Blob([json], { type: 'application/json' }));
+        const a = document.createElement('a');
+        a.href = url; a.download = filename; a.click();
+        URL.revokeObjectURL(url);
+      }
+      setBackupMsg('Backup created. Keep the file somewhere safe (e.g. Google Drive).');
+    } catch (err) {
+      setBackupErr(err.message || 'Could not create the backup.');
+    } finally {
+      setBackupBusy(false);
+    }
+  }
+
+  async function onRestoreFile(e) {
+    const file = e.target.files?.[0];
+    if (backupRef.current) backupRef.current.value = '';
+    if (!file) return;
+    if (!window.confirm('Restore will REPLACE everything currently on this device with the backup. This cannot be undone. Continue?')) return;
+    setBackupBusy(true); setBackupErr(null); setBackupMsg(null);
+    try {
+      await api.importData(file);
+      setToast('Backup restored — reloading…');
+      setTimeout(() => window.location.reload(), 900);
+    } catch (err) {
+      setBackupErr(err.message || 'Could not restore that file.');
+      setBackupBusy(false);
     }
   }
 
@@ -144,6 +197,29 @@ export default function Settings() {
                   value={settings.fat_goal ?? ''} onChange={setGoal('fat_goal')} onBlur={saveGoals} />
               </Stack>
             </Stack>
+          </CardContent>
+        </Card>
+
+        {/* Backup & restore */}
+        <Card>
+          <CardContent>
+            <Typography variant="subtitle1" fontWeight={700} gutterBottom>Backup &amp; restore</Typography>
+            <Typography color="text.secondary" variant="body2" sx={{ mb: 2 }}>
+              Your data lives only on this device. Download a backup file to keep it
+              safe (or move to a new phone), then restore it here. Restoring replaces
+              everything currently on this device.
+            </Typography>
+            <input ref={backupRef} type="file" accept="application/json,.json" hidden onChange={onRestoreFile} />
+            <Stack direction="row" spacing={2}>
+              <Button variant="contained" startIcon={<DownloadIcon />} onClick={downloadBackup} disabled={backupBusy}>
+                {backupBusy ? <CircularProgress size={22} color="inherit" /> : 'Download backup'}
+              </Button>
+              <Button variant="outlined" startIcon={<RestoreIcon />} onClick={() => backupRef.current?.click()} disabled={backupBusy}>
+                Restore from file
+              </Button>
+            </Stack>
+            {backupMsg && <Alert severity="success" sx={{ mt: 2 }}>{backupMsg}</Alert>}
+            {backupErr && <Alert severity="error" sx={{ mt: 2 }}>{backupErr}</Alert>}
           </CardContent>
         </Card>
 
