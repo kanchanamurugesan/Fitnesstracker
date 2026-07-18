@@ -1,0 +1,5 @@
+{
+  "appId": "com.fitnesstracker.app",
+  "appName": "Fitness Tracker",
+  "webDir": "dist"
+}
